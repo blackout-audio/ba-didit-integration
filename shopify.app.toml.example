@@ -1,0 +1,19 @@
+name = "ba-didit-integration"
+client_id = "YOUR_SHOPIFY_API_KEY"
+application_url = "https://your-app-domain.com"
+embedded = true
+
+[access_scopes]
+scopes = "read_orders,write_orders,read_customers,write_customers"
+
+[auth]
+redirect_urls = [
+  "https://your-app-domain.com/auth/callback"
+]
+
+[webhooks]
+api_version = "2025-10"
+
+[[webhooks.subscriptions]]
+topics = ["orders/updated"]
+uri = "/webhooks/shopify/orders-updated"
