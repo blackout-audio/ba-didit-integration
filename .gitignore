@@ -3,3 +3,7 @@ dist
 .env
 data.sqlite
 *.sqlite
+workers/node_modules
+workers/.wrangler
+workers/.dev.vars
+.wrangler

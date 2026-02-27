@@ -1,117 +1,124 @@
 # Shopify + Didit Fraud Verification App
 
-This app integrates Shopify orders with Didit identity verification:
+This repo now contains two runtimes:
 
-- Detects risky orders from `orders/updated` webhooks.
-- Creates a Didit verification session and writes order tags/metafields for Shopify Flow to email customers.
-- Retries every 7 days if not completed, with up to 2 follow-up links.
-- Marks successful checks by tagging the order with `verified` and `didit_verified`.
-- Sends manual-review alerts to `operations@blackoutaudio.com` when verification does not pass.
+- `src/` - original Node + Express implementation.
+- `workers/` - Cloudflare Worker implementation (recommended for free-tier reliability).
 
-## Stack
+The Worker runtime keeps the same business behavior:
 
-- Node.js + TypeScript + Express
-- SQLite (local persistence for shop tokens and verification jobs)
-- Didit API v3 session endpoints
-- Shopify OAuth + Admin GraphQL API
+- Trigger on `orders/updated` when order has `nofraud-review` tag.
+- Create Didit verification session.
+- Send transactional customer emails directly via Resend API (no marketing opt-in dependency).
+- Retry verification link generation every 7 days, up to 2 followups.
+- Mark `verified` / `didit_verified` on pass.
+- Mark `didit_manual_review` on non-pass and persist ops alert records.
 
-## 1) Configure Shopify App (Dev Dashboard 2026 flow)
+## Cloudflare architecture (single provider, free target)
 
-1. Create a **public/custom app** in Shopify Dev Dashboard (`dev.shopify.com/dashboard`).
-2. Set:
-   - **App URL**: `https://your-app-domain.com`
-   - **Allowed redirection URL(s)**: `https://your-app-domain.com/auth/callback`
-3. Request scopes:
-   - `read_orders`
-   - `write_orders`
-   - `read_customers`
-   - `write_customers`
-4. Add webhook subscriptions (or let this app auto-create on install):
-   - Topic: `orders/updated`
-   - URL: `https://your-app-domain.com/webhooks/shopify/orders-updated`
+- HTTP Webhooks + OAuth: Cloudflare Worker (`workers/src/index.ts`)
+- Durable state: Cloudflare D1 (`shops`, `verification_jobs`, `webhook_events`, `ops_alerts`)
+- Async processing: Cloudflare Queue (`ba-didit-jobs`)
+- Scheduling: Cloudflare Cron Trigger (`*/15 * * * *`)
 
-## 2) Configure Didit
+## Files added for Worker runtime
 
-From Didit Business Console:
+- `wrangler.toml`
+- `workers/src/index.ts`
+- `workers/src/workflow.ts`
+- `workers/src/db.ts`
+- `workers/src/shopify.ts`
+- `workers/src/didit.ts`
+- `workers/src/fraud.ts`
+- `workers/migrations/0001_init.sql`
+- `workers/migrations/0002_email_events.sql`
+- `workers/.dev.vars.example`
 
-- Copy `CLIENT_ID`, `CLIENT_SECRET`, and `WEBHOOK_SECRET_KEY`.
-- Set Didit webhook URL to:
-  - `https://your-app-domain.com/webhooks/didit`
+## 1) Configure Shopify and Didit URLs
 
-## 3) Local setup
+Set these endpoints to your deployed Worker domain:
 
-```bash
-npm install
-cp .env.example .env
-```
+- Shopify App URL: `https://<your-worker-domain>`
+- Shopify Redirect URL: `https://<your-worker-domain>/auth/callback`
+- Shopify webhook callback: `https://<your-worker-domain>/webhooks/shopify/orders-updated`
+- Didit webhook callback: `https://<your-worker-domain>/webhooks/didit`
 
-Update `.env` with your values.
+## 2) Cloudflare one-time setup
 
-## 4) Run
+From repo root:
 
 ```bash
-npm run dev
+npm run worker:install
 ```
 
-Health check:
+Create D1 database and queue:
 
 ```bash
-GET /health
+npx wrangler d1 create ba-didit-integration-db
+npx wrangler queues create ba-didit-jobs
 ```
 
-## 5) Install app on store
+Copy the generated D1 `database_id` into `wrangler.toml`.
+
+Apply D1 migration:
+
+```bash
+npx wrangler d1 migrations apply ba-didit-integration-db
+```
+
+Set secrets:
+
+```bash
+npx wrangler secret put SHOPIFY_API_KEY
+npx wrangler secret put SHOPIFY_API_SECRET
+npx wrangler secret put DIDIT_APP_ID
+npx wrangler secret put DIDIT_API_KEY
+npx wrangler secret put DIDIT_WEBHOOK_SECRET
+npx wrangler secret put OPS_ALERT_TOKEN
+npx wrangler secret put RESEND_API_KEY
+```
+
+## 3) Deploy Worker
+
+```bash
+npm run worker:deploy
+```
+
+## 4) Install Shopify app once
 
 Open:
 
 ```text
-https://your-app-domain.com/auth?shop=your-store.myshopify.com
+https://<your-worker-domain>/auth?shop=<your-store>.myshopify.com
 ```
 
-On callback, the app:
+The callback stores the offline token in D1 and registers the `ORDERS_UPDATED` webhook.
 
-- Exchanges OAuth code for offline token
-- Saves token in SQLite (`data.sqlite`)
-- Registers `ORDERS_UPDATED` webhook via Admin GraphQL
+## 5) Verify end-to-end behavior
 
-## 6) Email behavior (Flow-first)
-
-- App writes verification state to order tags + metafields:
-  - Tags: `didit_verification_required`, `didit_verification_pending`, `didit_verified`, `didit_manual_review`
-  - Metafields (namespace `didit` by default):
-    - `verification_status`
-    - `verification_url`
-    - `verification_session_id`
-- Shopify Flow should send customer emails from your templates when those tags/metafields change.
-- On pass:
-  - order gets `verified` + `didit_verified` tags
-  - customer receives verification-complete email
-- On not pass:
-  - order gets `didit_manual_review`
-  - ops receives alert email at `OPS_EMAIL` (default `operations@blackoutaudio.com`)
-
-## 7) Retry worker
-
-Retries run hourly via cron and only process jobs due at or before current time.
-
-You can manually trigger:
+- Add `nofraud-review` tag to a paid test order.
+- Confirm Didit session is created.
+- Confirm order gets:
+  - `didit_verification_required`
+  - `didit_verification_pending`
+  - metafields in namespace `didit`.
+- Simulate Didit pass/fail webhook and confirm tag/metafield outcomes.
+- Check retry path by calling:
 
 ```bash
-POST /jobs/retry/run
+curl -X POST https://<your-worker-domain>/jobs/retry/run
 ```
 
-## 8) Run without daily changes (recommended)
+## 6) Ops alerts endpoint
 
-Do not rely on local tunnels for production. Tunnel URLs rotate and stop after sleep/restart.
+Manual-review alerts are written to D1 and exposed via:
 
-Use one-time deployment to an always-on host with a stable URL:
-
-- This repo includes `render.yaml` for Render deployment.
-- Set a persistent SQLite path (`SQLITE_PATH=/var/data/data.sqlite`) using the mounted disk.
-- Configure Shopify App URL + redirect and Didit webhook endpoint once with the stable production URL.
-
-After that, no daily URL updates are needed.
+```text
+GET /ops/alerts?token=<OPS_ALERT_TOKEN>
+```
 
 ## Notes
 
-- Didit webhook payloads can vary. This app extracts session id from `session_id`, `sessionId`, or nested `data`.
-- `orderInvoiceSend` is not reliable for paid orders with no outstanding balance. Flow-first delivery avoids this limitation.
+- This is the highest practical reliability at zero cost, not a formal 100% SLA.
+- Webhooks are acked quickly and processed via queue to reduce timeout risk.
+- Idempotency keys prevent duplicate processing for repeated webhooks.

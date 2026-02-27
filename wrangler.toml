@@ -1,0 +1,40 @@
+name = "ba-didit-integration"
+main = "workers/src/index.ts"
+compatibility_date = "2026-02-13"
+
+[observability.logs]
+enabled = true
+
+[[d1_databases]]
+binding = "DIDIT_DB"
+database_name = "ba-didit-integration-db"
+database_id = "bdf4a8b0-054e-4a63-9321-5dfa128c97ea"
+migrations_dir = "workers/migrations"
+
+[[queues.producers]]
+binding = "DIDIT_JOBS"
+queue = "ba-didit-jobs"
+
+[[queues.consumers]]
+queue = "ba-didit-jobs"
+max_batch_size = 10
+max_batch_timeout = 10
+max_retries = 5
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+APP_URL = "https://ba-didit-integration.operations-1cf.workers.dev"
+SHOPIFY_SCOPES = "read_orders,write_orders,read_customers,write_customers"
+SHOPIFY_WEBHOOK_PATH = "/webhooks/shopify/orders-updated"
+CUSTOMER_EMAIL_PROVIDER = "gmail"
+FLOW_METAFIELD_NAMESPACE = "didit"
+FRAUD_TRIGGER_TAG = "nofraud-review"
+DIDIT_AUTH_BASE_URL = "https://apx.didit.me"
+DIDIT_VERIFY_BASE_URL = "https://verification.didit.me"
+DIDIT_FEATURES = "OCR + NFC + FACE"
+OPS_EMAIL = "operations@blackoutaudio.com"
+MAIL_FROM = "Blackout Audio Team <contact@blackoutaudio.com>"
+RETRY_DAYS = "7"
+MAX_FOLLOWUPS = "2"

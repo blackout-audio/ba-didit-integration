@@ -2,7 +2,7 @@
 
 client_id = "1d0a178029edb5936edb1d9ce8653c0f"
 name = "Didit Integration"
-application_url = "https://lukxam-ip-64-137-153-175.tunnelmole.net"
+application_url = "https://ba-didit-integration.operations-1cf.workers.dev"
 embedded = true
 
 [build]
@@ -20,4 +20,4 @@ api_version = "2026-04"
 scopes = "read_orders,write_orders,read_customers,write_customers"
 
 [auth]
-redirect_urls = [ "https://lukxam-ip-64-137-153-175.tunnelmole.net/auth/callback" ]
+redirect_urls = [ "https://ba-didit-integration.operations-1cf.workers.dev/auth/callback" ]
