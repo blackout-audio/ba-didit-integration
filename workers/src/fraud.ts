@@ -8,6 +8,7 @@ export interface ShopifyOrderWebhook {
   updated_at?: string;
   cancelled_at?: string | null;
   closed_at?: string | null;
+  financial_status?: string | null;
   customer?: {
     id?: number | string;
     first_name?: string | null;
@@ -67,7 +68,69 @@ export function shouldSkipFraudVerification(order: ShopifyOrderWebhook): boolean
     return true;
   }
 
-  return false;
+  return Boolean(getDeadPaymentReason(order.financial_status));
+}
+
+export type VerificationAbortReason =
+  | "order_not_found"
+  | "order_cancelled"
+  | "order_closed"
+  | "payment_voided"
+  | "payment_refunded"
+  | "payment_expired";
+
+export interface OrderVerificationSignals {
+  exists?: boolean;
+  cancelledAt?: string | null;
+  closedAt?: string | null;
+  financialStatus?: string | null;
+}
+
+/**
+ * Single source of truth for "this order must no longer receive verification emails".
+ * Accepts either webhook payload fields or Admin API order fields.
+ */
+export function getVerificationAbortReason(signals: OrderVerificationSignals): VerificationAbortReason | null {
+  if (signals.exists === false) {
+    return "order_not_found";
+  }
+  if (signals.cancelledAt) {
+    return "order_cancelled";
+  }
+  if (signals.closedAt) {
+    return "order_closed";
+  }
+  return getDeadPaymentReason(signals.financialStatus);
+}
+
+export function getOrderVerificationSignals(order: ShopifyOrderWebhook): OrderVerificationSignals {
+  return {
+    cancelledAt: order.cancelled_at ?? null,
+    closedAt: order.closed_at ?? null,
+    financialStatus: order.financial_status ?? null
+  };
+}
+
+/**
+ * A voided authorization, full refund, or expired authorization means the money
+ * is gone for good, so verification can no longer change the order's outcome.
+ * Partial refunds are deliberately excluded: the remaining balance may still
+ * be pending verification.
+ */
+function getDeadPaymentReason(
+  financialStatus: string | null | undefined
+): Extract<VerificationAbortReason, "payment_voided" | "payment_refunded" | "payment_expired"> | null {
+  const status = String(financialStatus ?? "").trim().toLowerCase();
+  if (status === "voided") {
+    return "payment_voided";
+  }
+  if (status === "refunded") {
+    return "payment_refunded";
+  }
+  if (status === "expired") {
+    return "payment_expired";
+  }
+  return null;
 }
 
 function getNormalizedOrderTags(order: ShopifyOrderWebhook): string[] {

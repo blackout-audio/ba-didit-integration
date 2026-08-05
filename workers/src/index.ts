@@ -2,7 +2,14 @@ import { WorkerEnv } from "./config";
 import { consumeOauthState, listOpsAlerts, saveOauthState, upsertShopAccessToken, upsertWebhookEvent } from "./db";
 import { verifyDiditWebhookSignature } from "./didit";
 import { randomHex, sha256Hex } from "./crypto";
-import { QueueJob, enqueueRetryForDueJobs, handleDiditDecisionEvent, handleRiskyOrderEvent, processRetryJob } from "./workflow";
+import {
+  QueueJob,
+  enqueueRetryForDueJobs,
+  handleDiditDecisionEvent,
+  handleRiskyOrderEvent,
+  processRetryJob,
+  reconcilePendingJobsWithShopify
+} from "./workflow";
 import {
   buildShopifyInstallUrl,
   exchangeAccessToken,
@@ -44,6 +51,14 @@ const app: ExportedHandler<WorkerEnv, QueueJob> = {
     if (request.method === "POST" && pathname === "/jobs/retry/run") {
       const enqueued = await enqueueRetryForDueJobs(env);
       return Response.json({ ok: true, enqueued }, { headers: jsonHeaders });
+    }
+
+    if (request.method === "POST" && pathname === "/jobs/reconcile") {
+      if (!isAuthorizedOpsRequest(request, env)) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+      const summary = await reconcilePendingJobsWithShopify(env);
+      return Response.json({ ok: true, ...summary }, { headers: jsonHeaders });
     }
 
     if (request.method === "GET" && pathname === "/ops/alerts") {
@@ -195,12 +210,16 @@ async function handleDiditWebhook(request: Request, env: WorkerEnv): Promise<Res
 }
 
 async function handleOpsAlerts(request: Request, env: WorkerEnv): Promise<Response> {
-  const token = new URL(request.url).searchParams.get("token");
-  if (!env.OPS_ALERT_TOKEN || token !== env.OPS_ALERT_TOKEN) {
+  if (!isAuthorizedOpsRequest(request, env)) {
     return new Response("Unauthorized", { status: 401 });
   }
   const alerts = await listOpsAlerts(env, 100);
   return Response.json({ alerts }, { headers: jsonHeaders });
+}
+
+function isAuthorizedOpsRequest(request: Request, env: WorkerEnv): boolean {
+  const token = new URL(request.url).searchParams.get("token");
+  return Boolean(env.OPS_ALERT_TOKEN) && token === env.OPS_ALERT_TOKEN;
 }
 
 function parseJson<T>(raw: string): T | null {

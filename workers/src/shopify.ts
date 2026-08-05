@@ -203,6 +203,55 @@ export async function setOrderVerificationMetafields(
   }
 }
 
+export interface ShopifyOrderVerificationState {
+  exists: boolean;
+  cancelledAt: string | null;
+  closedAt: string | null;
+  displayFinancialStatus: string | null;
+}
+
+export async function fetchOrderVerificationState(
+  env: WorkerEnv,
+  shop: string,
+  accessToken: string,
+  orderGidOrLegacyId: string
+): Promise<ShopifyOrderVerificationState> {
+  const id = orderGidOrLegacyId.startsWith("gid://")
+    ? orderGidOrLegacyId
+    : `gid://shopify/Order/${orderGidOrLegacyId}`;
+
+  const response = await shopifyGraphql(env, shop, accessToken, {
+    query: `
+      query OrderVerificationState($id: ID!) {
+        order(id: $id) {
+          id
+          cancelledAt
+          closedAt
+          displayFinancialStatus
+        }
+      }
+    `,
+    variables: { id }
+  });
+
+  const errors = response?.errors ?? [];
+  if (errors.length > 0) {
+    throw new Error(`Shopify order lookup failed: ${JSON.stringify(errors)}`);
+  }
+
+  const order = response?.data?.order;
+  if (!order) {
+    return { exists: false, cancelledAt: null, closedAt: null, displayFinancialStatus: null };
+  }
+
+  return {
+    exists: true,
+    cancelledAt: order.cancelledAt ?? null,
+    closedAt: order.closedAt ?? null,
+    displayFinancialStatus: order.displayFinancialStatus ? String(order.displayFinancialStatus) : null
+  };
+}
+
 export async function captureFirstUncapturedPayment(
   env: WorkerEnv,
   shop: string,

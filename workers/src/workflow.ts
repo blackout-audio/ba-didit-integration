@@ -4,6 +4,7 @@ import {
   getDueRetries,
   getJobById,
   getJobByOrder,
+  getJobsAwaitingVerification,
   getOrderTagSnapshot,
   getJobBySessionId,
   getShopAccessToken,
@@ -13,7 +14,8 @@ import {
   setJobProcessingError,
   tryInsertProvisioningJob,
   upsertOrderTagSnapshot,
-  updateJobWithNewSession
+  updateJobWithNewSession,
+  VerificationJob
 } from "./db";
 import {
   createDiditVerificationSession,
@@ -26,12 +28,21 @@ import {
   getCustomerEmail,
   getCustomerName,
   getOrderName,
+  getOrderVerificationSignals,
+  getVerificationAbortReason,
   isOrderCreatedOnOrAfterCutoff,
   ShopifyOrderWebhook,
   shouldSkipFraudVerification,
+  VerificationAbortReason,
   wasTriggerTagAdded
 } from "./fraud";
-import { addOrderTag, captureFirstUncapturedPayment, removeOrderTag, setOrderVerificationMetafields } from "./shopify";
+import {
+  addOrderTag,
+  captureFirstUncapturedPayment,
+  fetchOrderVerificationState,
+  removeOrderTag,
+  setOrderVerificationMetafields
+} from "./shopify";
 
 export type QueueJob =
   | { type: "process_shopify_order"; shop: string; order: ShopifyOrderWebhook }
@@ -43,6 +54,17 @@ export async function handleRiskyOrderEvent(env: WorkerEnv, shop: string, order:
   const previousTags = await getOrderTagSnapshot(env, shop, orderId);
   const currentTags = order.tags ?? "";
   await upsertOrderTagSnapshot(env, shop, orderId, currentTags);
+
+  // Cancelling or voiding an order also arrives here as orders/updated, so stop
+  // any pending reminder immediately instead of waiting for the next retry scan.
+  const abortReason = getVerificationAbortReason(getOrderVerificationSignals(order));
+  if (abortReason) {
+    const activeJob = await getJobByOrder(env, shop, orderId);
+    if (activeJob?.status === "awaiting_verification") {
+      await cancelVerificationJob(env, activeJob, abortReason);
+      return { skipped: true, reason: "order_no_longer_eligible" as const, abortReason, cancelledJobId: activeJob.id };
+    }
+  }
 
   if (!wasTriggerTagAdded(previousTags, currentTags, env.FRAUD_TRIGGER_TAG)) {
     return { skipped: true, reason: "trigger_tag_not_added" as const };
@@ -192,6 +214,33 @@ export async function processRetryJob(env: WorkerEnv, jobId: number) {
   }
 
   try {
+    const shopAccessToken = await getShopAccessToken(env, job.shop);
+    if (!shopAccessToken) {
+      // Without a token the Shopify state cannot be confirmed, so never email blind.
+      await setJobProcessingError(
+        env,
+        job.id,
+        "Missing Shopify access token; follow-up withheld until reinstall",
+        new Date(Date.now() + 6 * 60 * 60_000).toISOString()
+      );
+      return { skipped: true, reason: "missing_shop_token" as const };
+    }
+
+    // Authoritative pre-send check: the order may have been cancelled or voided in
+    // Shopify since this follow-up was scheduled. This runs before the Didit
+    // reconciliation so a dead order triggers no further customer email at all.
+    const orderState = await fetchOrderVerificationState(env, job.shop, shopAccessToken, job.orderId);
+    const abortReason = getVerificationAbortReason({
+      exists: orderState.exists,
+      cancelledAt: orderState.cancelledAt,
+      closedAt: orderState.closedAt,
+      financialStatus: orderState.displayFinancialStatus
+    });
+    if (abortReason) {
+      await cancelVerificationJob(env, job, abortReason, shopAccessToken);
+      return { skipped: true, reason: "order_no_longer_eligible" as const, abortReason };
+    }
+
     // Reconcile latest decision before sending any follow-up.
     const decisionRecheck = await handleDiditDecisionEvent(env, job.diditSessionId);
     if (decisionRecheck.handled) {
@@ -232,18 +281,15 @@ export async function processRetryJob(env: WorkerEnv, jobId: number) {
       nextAttemptAt
     });
 
-    const shopAccessToken = await getShopAccessToken(env, job.shop);
-    if (shopAccessToken) {
-      await addOrderTag(env, job.shop, shopAccessToken, job.orderId, "didit_verification_pending");
-      await setOrderVerificationMetafields(env, {
-        shop: job.shop,
-        accessToken: shopAccessToken,
-        orderGidOrLegacyId: job.orderId,
-        status: "pending",
-        verificationUrl: diditSession.verificationUrl,
-        sessionId: diditSession.sessionId
-      });
-    }
+    await addOrderTag(env, job.shop, shopAccessToken, job.orderId, "didit_verification_pending");
+    await setOrderVerificationMetafields(env, {
+      shop: job.shop,
+      accessToken: shopAccessToken,
+      orderGidOrLegacyId: job.orderId,
+      status: "pending",
+      verificationUrl: diditSession.verificationUrl,
+      sessionId: diditSession.sessionId
+    });
 
     await sendVerificationEmail({
       env,
@@ -263,6 +309,82 @@ export async function processRetryJob(env: WorkerEnv, jobId: number) {
     await setJobProcessingError(env, job.id, message, new Date(Date.now() + 5 * 60_000).toISOString());
     throw error;
   }
+}
+
+/**
+ * Terminates a verification job whose order can no longer be verified. Marking the
+ * job clears next_attempt_at, which drops it out of the retry scan permanently.
+ */
+async function cancelVerificationJob(
+  env: WorkerEnv,
+  job: VerificationJob,
+  reason: VerificationAbortReason,
+  accessToken?: string | null
+) {
+  await markJobStatus(env, job.id, "order_cancelled");
+
+  const token = accessToken ?? (await getShopAccessToken(env, job.shop));
+  if (token) {
+    await removeOrderTag(env, job.shop, token, job.orderId, "didit_verification_pending");
+    await setOrderVerificationMetafields(env, {
+      shop: job.shop,
+      accessToken: token,
+      orderGidOrLegacyId: job.orderId,
+      status: "cancelled",
+      verificationUrl: job.diditVerificationUrl,
+      sessionId: job.diditSessionId
+    });
+  }
+
+  await recordOpsAlert(env, {
+    shop: job.shop,
+    orderId: job.orderId,
+    customerEmail: job.customerEmail,
+    diditSessionId: job.diditSessionId,
+    reason: `verification_cancelled:${reason}`
+  });
+
+  console.info("Verification job cancelled", { jobId: job.id, orderId: job.orderId, reason });
+}
+
+/**
+ * Re-checks every pending job against live Shopify state and cancels the ones whose
+ * order is no longer verifiable. Sends no email; safe to call at any time.
+ */
+export async function reconcilePendingJobsWithShopify(env: WorkerEnv) {
+  const jobs = await getJobsAwaitingVerification(env);
+  const cancelled: Array<{ jobId: number; orderId: string; reason: VerificationAbortReason }> = [];
+  const kept: number[] = [];
+  const failed: Array<{ jobId: number; error: string }> = [];
+
+  for (const job of jobs) {
+    try {
+      const accessToken = await getShopAccessToken(env, job.shop);
+      if (!accessToken) {
+        failed.push({ jobId: job.id, error: `No access token for ${job.shop}` });
+        continue;
+      }
+
+      const orderState = await fetchOrderVerificationState(env, job.shop, accessToken, job.orderId);
+      const abortReason = getVerificationAbortReason({
+        exists: orderState.exists,
+        cancelledAt: orderState.cancelledAt,
+        closedAt: orderState.closedAt,
+        financialStatus: orderState.displayFinancialStatus
+      });
+
+      if (abortReason) {
+        await cancelVerificationJob(env, job, abortReason, accessToken);
+        cancelled.push({ jobId: job.id, orderId: job.orderId, reason: abortReason });
+      } else {
+        kept.push(job.id);
+      }
+    } catch (error) {
+      failed.push({ jobId: job.id, error: error instanceof Error ? error.message : "Unknown reconcile error" });
+    }
+  }
+
+  return { scanned: jobs.length, cancelled, kept, failed };
 }
 
 export async function enqueueRetryForDueJobs(env: WorkerEnv) {

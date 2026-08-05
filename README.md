@@ -14,6 +14,12 @@ The Worker runtime keeps the same business behavior:
 - Mark `verified` / `didit_verified` on pass.
 - Mark `didit_manual_review` on non-pass and persist ops alert records.
 
+Verification stops as soon as the order can no longer be verified. An order that is
+cancelled, closed, voided, fully refunded or has an expired authorization is moved to
+job status `order_cancelled`, which clears its retry schedule. This is enforced in two
+places: immediately when the `orders/updated` webhook reports the change, and again as
+an authoritative Shopify lookup right before any follow-up email is sent.
+
 ## Cloudflare architecture (single provider, free target)
 
 - HTTP Webhooks + OAuth: Cloudflare Worker (`workers/src/index.ts`)
@@ -109,12 +115,21 @@ The callback stores the offline token in D1 and registers the `ORDERS_UPDATED` w
 curl -X POST https://<your-worker-domain>/jobs/retry/run
 ```
 
-## 6) Ops alerts endpoint
+## 6) Ops endpoints
 
 Manual-review alerts are written to D1 and exposed via:
 
 ```text
 GET /ops/alerts?token=<OPS_ALERT_TOKEN>
+```
+
+Cancellations are recorded here too, with reason `verification_cancelled:<abort reason>`.
+
+To immediately re-check every pending job against live Shopify state and cancel any
+whose order is no longer verifiable (sends no email):
+
+```bash
+curl -X POST "https://<your-worker-domain>/jobs/reconcile?token=<OPS_ALERT_TOKEN>"
 ```
 
 ## Notes

@@ -5,7 +5,8 @@ export type VerificationJobStatus =
   | "awaiting_verification"
   | "verified"
   | "manual_review"
-  | "retry_exhausted";
+  | "retry_exhausted"
+  | "order_cancelled";
 
 export interface VerificationJob {
   id: number;
@@ -243,6 +244,20 @@ export async function getDueRetries(env: WorkerEnv, nowIso: string): Promise<Ver
     `
   )
     .bind(nowIso)
+    .all<Record<string, unknown>>();
+  return rows.results.map(mapJob).filter((job): job is VerificationJob => Boolean(job));
+}
+
+export async function getJobsAwaitingVerification(env: WorkerEnv, limit = 200): Promise<VerificationJob[]> {
+  const rows = await env.DIDIT_DB.prepare(
+    `
+      SELECT * FROM verification_jobs
+      WHERE status = 'awaiting_verification'
+      ORDER BY id ASC
+      LIMIT ?
+    `
+  )
+    .bind(limit)
     .all<Record<string, unknown>>();
   return rows.results.map(mapJob).filter((job): job is VerificationJob => Boolean(job));
 }
