@@ -1,11 +1,8 @@
 # Shopify + Didit Fraud Verification App
 
-This repo now contains two runtimes:
+Runs entirely on Cloudflare. All application code lives in `workers/`.
 
-- `src/` - original Node + Express implementation.
-- `workers/` - Cloudflare Worker implementation (recommended for free-tier reliability).
-
-The Worker runtime keeps the same business behavior:
+Behavior:
 
 - Trigger on `orders/updated` when order has `nofraud-review` tag.
 - Create Didit verification session.
@@ -26,19 +23,6 @@ an authoritative Shopify lookup right before any follow-up email is sent.
 - Durable state: Cloudflare D1 (`shops`, `verification_jobs`, `webhook_events`, `ops_alerts`)
 - Async processing: Cloudflare Queue (`ba-didit-jobs`)
 - Scheduling: Cloudflare Cron Trigger (`*/15 * * * *`)
-
-## Files added for Worker runtime
-
-- `wrangler.toml`
-- `workers/src/index.ts`
-- `workers/src/workflow.ts`
-- `workers/src/db.ts`
-- `workers/src/shopify.ts`
-- `workers/src/didit.ts`
-- `workers/src/fraud.ts`
-- `workers/migrations/0001_init.sql`
-- `workers/migrations/0002_email_events.sql`
-- `workers/.dev.vars.example`
 
 ## 1) Configure Shopify and Didit URLs
 
@@ -112,10 +96,12 @@ The callback stores the offline token in D1 and registers the `ORDERS_UPDATED` w
 - Check retry path by calling:
 
 ```bash
-curl -X POST https://<your-worker-domain>/jobs/retry/run
+curl -X POST "https://<your-worker-domain>/jobs/retry/run?token=<OPS_ALERT_TOKEN>"
 ```
 
 ## 6) Ops endpoints
+
+All `/jobs/*` and `/ops/*` endpoints require `?token=<OPS_ALERT_TOKEN>`.
 
 Manual-review alerts are written to D1 and exposed via:
 

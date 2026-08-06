@@ -49,6 +49,9 @@ const app: ExportedHandler<WorkerEnv, QueueJob> = {
     }
 
     if (request.method === "POST" && pathname === "/jobs/retry/run") {
+      if (!isAuthorizedOpsRequest(request, env)) {
+        return new Response("Unauthorized", { status: 401 });
+      }
       const enqueued = await enqueueRetryForDueJobs(env);
       return Response.json({ ok: true, enqueued }, { headers: jsonHeaders });
     }
