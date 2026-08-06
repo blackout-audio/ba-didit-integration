@@ -1,5 +1,8 @@
 # Shopify + Didit Fraud Verification App
 
+> **Do not deploy this repo. It is not the code running in production.**
+> Deploying from here is blocked on purpose. Read [DEPLOYING.md](DEPLOYING.md) first.
+
 Runs entirely on Cloudflare. All application code lives in `workers/`.
 
 Behavior:
@@ -70,9 +73,7 @@ npx wrangler secret put RESEND_API_KEY
 
 ## 3) Deploy Worker
 
-```bash
-npm run worker:deploy
-```
+Deploying from this repo is currently blocked. See [DEPLOYING.md](DEPLOYING.md).
 
 ## 4) Install Shopify app once
 

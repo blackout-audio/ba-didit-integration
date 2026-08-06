@@ -38,7 +38,6 @@ import {
 } from "./fraud";
 import {
   addOrderTag,
-  captureFirstUncapturedPayment,
   fetchOrderVerificationState,
   removeOrderTag,
   setOrderVerificationMetafields
@@ -454,7 +453,6 @@ export async function handleDiditDecisionEvent(env: WorkerEnv, sessionId: string
       verificationUrl: job.diditVerificationUrl,
       sessionId
     });
-    await captureFirstUncapturedPayment(env, job.shop, accessToken, job.orderId);
 
     await sendSuccessEmail({
       env,

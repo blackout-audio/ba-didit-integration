@@ -16,14 +16,22 @@ export interface ShopifyOrderWebhook {
   } | null;
 }
 
-export function isOrderFraudRisk(order: ShopifyOrderWebhook, triggerTag: string): boolean {
-  const requiredTag = normalizeTag(triggerTag);
-  if (!requiredTag) {
+export function isOrderFraudRisk(order: ShopifyOrderWebhook, triggerTags: string): boolean {
+  const required = getTriggerTags(triggerTags);
+  if (required.length === 0) {
     return false;
   }
 
   const orderTags = getNormalizedOrderTags(order);
-  return orderTags.includes(requiredTag);
+  return required.some((tag) => orderTags.includes(tag));
+}
+
+/**
+ * FRAUD_TRIGGER_TAG holds one or more tags, comma separated, e.g.
+ * "nofraud-review,nofraud-fail". Underscores and hyphens are interchangeable.
+ */
+function getTriggerTags(triggerTags: string): string[] {
+  return getNormalizedTagsFromCsv(triggerTags ?? "");
 }
 
 export const ORDER_CREATION_CUTOFF_ISO = "2026-02-15T00:00:00.000Z";
@@ -40,10 +48,10 @@ export function isOrderCreatedOnOrAfterCutoff(order: ShopifyOrderWebhook): boole
 export function wasTriggerTagAdded(
   previousTagsCsv: string | null,
   currentTagsCsv: string | null | undefined,
-  triggerTag: string
+  triggerTags: string
 ): boolean {
-  const requiredTag = normalizeTag(triggerTag);
-  if (!requiredTag) {
+  const required = getTriggerTags(triggerTags);
+  if (required.length === 0) {
     return false;
   }
 
@@ -54,7 +62,7 @@ export function wasTriggerTagAdded(
 
   const previous = getNormalizedTagsFromCsv(previousTagsCsv);
   const current = getNormalizedTagsFromCsv(currentTagsCsv ?? "");
-  return !previous.includes(requiredTag) && current.includes(requiredTag);
+  return required.some((tag) => !previous.includes(tag) && current.includes(tag));
 }
 
 export function shouldSkipFraudVerification(order: ShopifyOrderWebhook): boolean {

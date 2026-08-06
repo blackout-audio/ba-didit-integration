@@ -1,14 +1,14 @@
 {
   "name": "ba-didit-integration",
   "version": "1.0.0",
-  "description": "Shopify + Didit fraud verification integration, running as a Cloudflare Worker",
+  "description": "Shopify + Didit fraud verification, running as a Cloudflare Worker",
   "private": true,
   "type": "module",
   "scripts": {
     "worker:install": "npm --prefix workers install",
-    "worker:dev": "npm --prefix workers run dev",
     "worker:check": "npm --prefix workers run check",
-    "worker:deploy": "npm --prefix workers run deploy"
+    "worker:dev": "echo \"BLOCKED: see DEPLOYING.md - this repo does not match the running Worker\" && exit 1",
+    "worker:deploy": "echo \"BLOCKED: see DEPLOYING.md - this repo does not match the running Worker\" && exit 1"
   },
   "keywords": [],
   "author": "",
