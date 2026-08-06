@@ -29,15 +29,27 @@ repo's source. There is production behavior here that was never committed.
 ## Before this repo can be deployed again
 
 1. Recover the real source of version `22e82e4e-9304-43f1-ab82-c20a5aaa6b6b`.
-   `wrangler init --from-dash` only returns a scaffold, and an OAuth login cannot
-   read script content over the API (error 10405). So either download the code
-   from the Cloudflare dashboard, or create an API token with **Workers Scripts:
-   Read** and fetch:
 
-   ```bash
-   curl -H "Authorization: Bearer <API_TOKEN>" \
-     "https://api.cloudflare.com/client/v4/accounts/1cfc83c6c20d80d39534a231188e08d9/workers/scripts/ba-didit-integration/content"
-   ```
+   **The API cannot do this.** All of the following were tested and every one
+   returns the *most recently uploaded* script, ignoring the version asked for:
+
+   - `/workers/scripts/{name}/content/v2`
+   - `/workers/scripts/{name}/content/v2?version_id={version}`
+   - `/workers/services/{name}/environments/production/content/v2`
+   - `/workers/scripts/{name}/versions/{version}/content` (returns metadata only)
+
+   `wrangler init --from-dash` returns a blank scaffold, not the real code. An
+   API token would not help, because the limitation is the API, not permissions.
+
+   That leaves two options:
+
+   - **Cloudflare dashboard.** Because `22e82e4e` is the currently active
+     deployment, the Worker's code view shows it. Copy it out by hand. You get
+     the bundled single-file build, not the original tidy TypeScript.
+   - **The machine that deployed it.** The Aug 1 upload was made with wrangler by
+     `operations@blackoutaudio.com`, and the source is *not* on the workstation
+     that holds this repo. If that machine or CI job still has its working copy,
+     that is the real source and is far better than the bundle.
 
 2. Commit that source, then reconcile it with the fixes already in this repo
    (see git log): cancelled/voided order guard, ops token on `/jobs/*`, and the
